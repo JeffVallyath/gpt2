@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass
 
+import torch.nn as nn
+
 
 @dataclass
 class GPTConfig:
@@ -12,3 +14,9 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True
+
+
+class GPT(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
