@@ -77,3 +77,32 @@ class GPT(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.config = config
+        #wte = word token embeddings, which acts as a look up table that turns token IDs into vectors:  wpe = word positional embeddings, which encode where a token is in the sequence
+        self.transformer = nn.ModuleDict(dict(
+                                              wte = nn.Embedding(config.vocab_size, config.n_embd), 
+                                              wpe = nn.Embedding(config.block_size, config.n_embd), 
+                                              drop = nn.Dropout(config.dropout), 
+                                              h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]), 
+                                              ln_f = nn.LayerNorm(config.n_embd, bias = config.bias)))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+    #idx is the input Token IDs
+    def forward(self, idx, targets = None):
+        device = idx.device
+        B, T  = idx.size()
+        #checks that sequence length is not longer than allowed context window
+        assert T <= self.config.block_size, f"sequence_length {T} exceeds block_size {self.config.block_size}"
+        pos = torch.arange(0, T, dtype = torch.long, device = device)
+        tok_embd = self.transformer.wte(idx)
+        pos_embd = self.transformer.wpe(pos)
+        x = self.transformer.drop(tok_embd + pos_embd)
+        #each block gives the sequence another round of "look backward, mix information, then process more deeply"
+        for block in self.transformer.h:
+            x = block(x)
+        x = self.transformer.ln_f(x)
+        logits = self.lm_head(x)
+
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index = -1)
+        
+        return logits, loss
