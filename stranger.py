@@ -85,6 +85,26 @@ class GPT(nn.Module):
                                               h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]), 
                                               ln_f = nn.LayerNorm(config.n_embd, bias = config.bias)))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias = False)
+
+        #weight tying - lm_head and token embeddings share the same weight matrix
+        self.transformer.wte.weight = self.lm_head.weight
+
+        #intialize all custom weights with our custom scheme
+        self.apply(self._init_weights)
+
+        for pn, p in self.named_parameters():
+            if pn.endswith('c_proj.weight'):
+                torch.nn.init.normal_(p, mean = 0.0, std = 0.02 / math.sqrt(2 * config.n_layer))
+        
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean = 0.0, std = 0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean = 0.0, std = 0.02)
+
+    
     #idx is the input Token IDs
     def forward(self, idx, targets = None):
         device = idx.device
