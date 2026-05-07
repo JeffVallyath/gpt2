@@ -5,6 +5,7 @@ import pickle
 import numpy as np
 import torch
 from stranger import GPT, GPTConfig
+import time
 
 out_dir = 'checkpoints'
 data_dir = 'data/shakespeare_char'
@@ -81,3 +82,58 @@ def get_lr(it):
     decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     return min_lr + coeff * (learning_rate - min_lr)
+
+@torch.no_grad()
+#how well is the model doing on both seen and unseen data?
+def estimate_loss():
+    model.eval()
+    out = {}
+    for split in ['train', 'val']:
+        losses = torch.zeros(eval_iters)
+        for k in range(eval_iters):
+            x, y = get_batch(split)
+            _, loss = model(x, y)
+            #store the scalar loss value into the losses tensor, .item() converts 0 dimensional pytorch tensor into a normal number
+            losses[k] = loss.item()
+        out[split] = losses.mean().item()
+    #switch back into training mode after evaluation is done becuase dropout and other training-specific behavior should be active for actual training steps
+    model.train()
+    #return the dictionary containing average train and validation losses
+    return out
+
+best_val_loss = float('inf')
+t0 = time.time()
+
+for iter_num in range(max_iters + 1):
+    #set learning rate for this iteration
+    lr = get_lr(iter_num)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+    #periodic eval and checkpointing
+    if iter_num % eval_interval == 0:
+        losses = estimate_loss()
+        print(f"step{iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}, lr {lr:.6f}")
+        #if current validation loss is better than any previous one, and if this isnt just step 0, save checkpoint
+        if losses['val'] < best_val_loss and iter_num > 0:
+            best_val_loss = losses['val']
+            checkpoint = {'model': model.state_dict(), 'optimizer': optimizer.state_dict(), 'config': config, 'iter_num': iter_num, 'best_val_loss': best_val_loss,}
+            torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
+            print(f" saved checkpoint to {out_dir}/ckpt.pt (val {best_val_loss:.4f})")
+    #prevents loop from running one more training step after reaching max_iters (final evaluation)
+    if iter_num == max_iters:
+        break
+
+    #one training step
+    x, y = get_batch('train')
+    _, loss = model(x, y)
+    #clear old gradients before backpropogating the new ones, setnone to True more efficient than zero-ing out tensors
+    optimizer.zero_grad(set_to_none = True)
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    optimizer.step()
+
+    if iter_num %  log_interval == 0 and iter_num > 0:
+        dt = time.time() - t0
+        t0 = time.time()
+        print(f"iter {iter_num}: loss {loss.item():.4f}, {dt * 1000 / log_interval:.1f}ms/iter")
+
